@@ -14,6 +14,7 @@ const chimeDBPathEnvKey = "CHIME_DB_PATH"
 
 const (
 	runCommandName    = "run"
+	takeCommandName   = "take"
 	listCommandName   = "list"
 	addCommandName    = "add"
 	removeCommandName = "remove"
@@ -24,6 +25,10 @@ type globalArgs struct {
 }
 
 type run struct {
+	globalArgs
+}
+
+type take struct {
 	globalArgs
 	jobID int
 }
@@ -84,40 +89,40 @@ func (r run) Run() error {
 	}
 	defer db.Close()
 
+	num := 0
+	for {
+		nextJob, err := db.TakeNextJob()
+		if err != nil {
+			return err
+		}
+		if nextJob == nil {
+			break
+		}
+		if err := execJob(db, nextJob); err != nil {
+			return err
+		}
+		num++
+	}
+	log.Printf("finished after processing %d jobs", num)
+	return nil
+}
+
+func (t take) Run() error {
+	db, err := Open(t.globalArgs.dbPath)
+	if err != nil {
+		return fmt.Errorf("failed to open db: %w", err)
+	}
+	defer db.Close()
+
 	nextJob, err := db.TakeNextJob()
 	if err != nil {
 		return err
 	}
-
-	cmd := exec.Command("sh", "-c", nextJob.Command)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	runJobErr := func() error {
-		if err := cmd.Start(); err != nil {
-			return err
-		}
-		if err := db.SetJobPID(int64(nextJob.ID), int64(cmd.Process.Pid)); err != nil {
-			log.Printf("failed to set job pid: %s", err)
-		}
-
-		if err := cmd.Wait(); err != nil {
-			return err
-		}
+	if nextJob == nil {
 		return nil
-	}()
-
-	if runJobErr != nil {
-		if err := db.SetJobStatus(int64(nextJob.ID), int64(statusDoneFailed)); err != nil {
-			return fmt.Errorf("failed to set job status to failed (%s) for job error: %s", err, runJobErr)
-		}
-	} else {
-		if err := db.SetJobStatus(int64(nextJob.ID), int64(statusDoneSuccess)); err != nil {
-			return fmt.Errorf("failed to set job status to success for job error: %s", runJobErr)
-		}
 	}
 
-	return runJobErr
+	return execJob(db, nextJob)
 }
 
 func (cmd list) Run() error {
@@ -176,6 +181,8 @@ func parseSubcommand(globals globalArgs, args []string) (subcommand, error) {
 
 	switch cmd {
 	case runCommandName:
+		return run{globalArgs: globals}, nil
+	case takeCommandName:
 		var jobID int
 		var err error
 		if len(args) == 1 {
@@ -183,7 +190,7 @@ func parseSubcommand(globals globalArgs, args []string) (subcommand, error) {
 				return nil, fmt.Errorf("param required: command to run")
 			}
 		}
-		return run{globalArgs: globals, jobID: jobID}, nil
+		return take{globalArgs: globals, jobID: jobID}, nil
 	case listCommandName:
 		return list{globalArgs: globals}, nil
 	case addCommandName:
@@ -205,4 +212,36 @@ func parseSubcommand(globals globalArgs, args []string) (subcommand, error) {
 		}, nil
 	}
 	return nil, fmt.Errorf("unknown command: '%s'", cmd)
+}
+
+func execJob(db *DB, nextJob *Job) error {
+	cmd := exec.Command("sh", "-c", nextJob.Command)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	runJobErr := func() error {
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		if err := db.SetJobPID(int64(nextJob.ID), int64(cmd.Process.Pid)); err != nil {
+			log.Printf("failed to set job pid: %s", err)
+		}
+
+		if err := cmd.Wait(); err != nil {
+			return err
+		}
+		return nil
+	}()
+
+	if runJobErr != nil {
+		if err := db.SetJobStatus(int64(nextJob.ID), int64(statusDoneFailed)); err != nil {
+			return fmt.Errorf("failed to set job status to failed (%s) for job error: %s", err, runJobErr)
+		}
+	} else {
+		if err := db.SetJobStatus(int64(nextJob.ID), int64(statusDoneSuccess)); err != nil {
+			return fmt.Errorf("failed to set job status to success for job error: %s", runJobErr)
+		}
+	}
+
+	return nil
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -97,6 +98,9 @@ func (db *DB) TakeNextJob() (*Job, error) {
 			&job.StartedAt,
 			&job.FinishedAt,
 		); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	return &job, nil
