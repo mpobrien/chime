@@ -8,6 +8,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"time"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 )
 
 const chimeDBPathEnvKey = "CHIME_DB_PATH"
@@ -126,6 +130,7 @@ func (t take) Run() error {
 }
 
 func (cmd list) Run() error {
+	fmt.Println("opening", cmd.globalArgs.dbPath)
 	db, err := Open(cmd.globalArgs.dbPath)
 	if err != nil {
 		return fmt.Errorf("failed to open db: %w", err)
@@ -136,11 +141,95 @@ func (cmd list) Run() error {
 	if err != nil {
 		return fmt.Errorf("failed to list jobs: %w", err)
 	}
+
+	headerStyle := lipgloss.NewStyle().
+		PaddingLeft(2).
+		PaddingRight(2).Foreground(lipgloss.Color("#ffffff")).Bold(true)
+	cellStyle := lipgloss.NewStyle().
+		PaddingLeft(2).
+		PaddingRight(2).Foreground(lipgloss.Color("#ffffff"))
+	pendingStyle := lipgloss.NewStyle().
+		PaddingLeft(2).
+		PaddingRight(2).Foreground(lipgloss.Color("#888888"))
+	progressStyle := lipgloss.NewStyle().
+		PaddingLeft(2).
+		PaddingRight(2).Foreground(lipgloss.Color("#ffff00"))
+	successStyle := lipgloss.NewStyle().
+		PaddingLeft(2).
+		PaddingRight(2).Foreground(lipgloss.Color("#00ff00"))
+	failedStyle := lipgloss.NewStyle().
+		PaddingLeft(2).
+		PaddingRight(2).Foreground(lipgloss.Color("196"))
+
+	t := table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("99"))).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			if row < 0 {
+				return headerStyle
+			}
+			if col != 1 {
+				return cellStyle
+			}
+			switch jobs[row].Status {
+			case statusPending:
+				return pendingStyle
+			case statusInProgress:
+				return progressStyle
+			case statusDoneSuccess:
+				return successStyle
+			case statusDoneFailed:
+				return failedStyle
+			}
+			return cellStyle
+		}).
+		// StyleFunc(func(row, col int) lipgloss.Style {
+		// 	switch {
+		// 	case row == 0:
+		// 		return lipgloss.NewStyle()
+		// 	case row%2 == 0:
+		// 		return lipgloss.NewStyle()
+		// 	default:
+		// 		return OddRowStyle
+		// 	}
+		// }).
+		Headers("ID", "STATUS", "COMMAND")
+
 	for _, job := range jobs {
-		// TODO tabwriter formatted output
-		fmt.Println(job.String())
+		t.Row(JobToRow(job)...)
 	}
+
+	fmt.Println(t)
+
 	return err
+}
+
+func JobRowStyles() {
+
+}
+
+func JobToRow(job Job) []string {
+	out := []string{
+		fmt.Sprintf("%d", job.ID),
+	}
+	switch job.Status {
+	case statusPending:
+		out = append(out, "Pending")
+	case statusInProgress:
+		out = append(
+			out,
+			fmt.Sprintf("Running (%s)", time.Now().Sub(job.StartedAtTime())),
+		)
+	case statusDoneSuccess:
+		out = append(
+			out,
+			fmt.Sprintf("Done (%s)", job.FinishedAtTime().Sub(job.StartedAtTime())),
+		)
+	case statusDoneFailed:
+		out = append(out, "Failed")
+	}
+	out = append(out, job.Command)
+	return out
 }
 
 func (cmd remove) Run() error {

@@ -34,6 +34,18 @@ type Job struct {
 	FinishedAt int64  `db:"finished_at"`
 }
 
+func (job Job) CreatedAtTime() time.Time {
+	return time.UnixMilli(job.CreatedAt)
+}
+
+func (job Job) FinishedAtTime() time.Time {
+	return time.UnixMilli(job.FinishedAt)
+}
+
+func (job Job) StartedAtTime() time.Time {
+	return time.UnixMilli(job.StartedAt)
+}
+
 func (job Job) String() string {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("%d: ", job.ID))
@@ -53,10 +65,10 @@ func (job Job) String() string {
 	}
 	if job.StartedAt != 0 {
 		if job.FinishedAt != 0 {
-			elapsed := time.UnixMilli(job.FinishedAt).Sub(time.UnixMilli(job.StartedAt))
+			elapsed := job.FinishedAtTime().Sub(job.StartedAtTime())
 			sb.WriteString(fmt.Sprintf(" %s", elapsed))
 		} else {
-			elapsed := time.Since(time.UnixMilli(job.StartedAt))
+			elapsed := time.Since(job.StartedAtTime())
 			sb.WriteString(fmt.Sprintf(" %s", elapsed))
 		}
 	}
