@@ -5,15 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
-	// "fmt"
 	_ "github.com/mattn/go-sqlite3"
-	// "log"
-	// "os"
 )
 
 type DB struct {
+	lock *sync.Mutex
 	*sql.DB
 }
 
@@ -77,16 +76,22 @@ func (job Job) String() string {
 }
 
 func (db *DB) SetJobPID(jobID int64, pid int64) error {
+	db.lock.Lock()
+	defer db.lock.Unlock()
 	_, err := db.Exec("UPDATE jobs SET pid=? WHERE id=?", pid, jobID)
 	return err
 }
 
 func (db *DB) SetJobStatus(jobID int64, status int64) error {
+	db.lock.Lock()
+	defer db.lock.Unlock()
 	_, err := db.Exec("UPDATE jobs SET status=?, finished_at=? WHERE id=?", status, time.Now().UnixMilli(), jobID)
 	return err
 }
 
 func (db *DB) TakeNextJob() (*Job, error) {
+	db.lock.Lock()
+	defer db.lock.Unlock()
 	var job Job
 	if err := db.QueryRow(`
 	WITH selected_job AS (
@@ -120,6 +125,8 @@ func (db *DB) TakeNextJob() (*Job, error) {
 
 // Deletes job with given ID. Returns true if the job existed.
 func (db *DB) DeleteJob(id int64) (bool, error) {
+	db.lock.Lock()
+	defer db.lock.Unlock()
 	result, err := db.Exec(`DELETE FROM jobs WHERE id = ?`, id)
 	if err != nil {
 		return false, err
@@ -133,6 +140,8 @@ func (db *DB) DeleteJob(id int64) (bool, error) {
 }
 
 func (db *DB) ListJobs() ([]Job, error) {
+	db.lock.Lock()
+	defer db.lock.Unlock()
 	rows, err := db.Query(`SELECT id, command, pid, status, created_at, started_at, finished_at FROM JOBS`)
 	if err != nil {
 		return nil, err
@@ -160,6 +169,9 @@ func (db *DB) ListJobs() ([]Job, error) {
 }
 
 func (db *DB) AddJob(command string) (int64, error) {
+	db.lock.Lock()
+	defer db.lock.Unlock()
+
 	result, err := db.Exec(`
 	BEGIN TRANSACTION;
 	INSERT INTO jobs (command, status, created_at, started_at, finished_at)  values (?,?,?,?,?);
@@ -197,6 +209,7 @@ func Open(filename string) (*DB, error) {
 	}
 
 	return &DB{
-		DB: db,
+		lock: &sync.Mutex{},
+		DB:   db,
 	}, nil
 }

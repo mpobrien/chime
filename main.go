@@ -17,6 +17,7 @@ import (
 const chimeDBPathEnvKey = "CHIME_DB_PATH"
 
 const (
+	helpCommandName   = "help"
 	runCommandName    = "run"
 	takeCommandName   = "take"
 	listCommandName   = "list"
@@ -30,6 +31,7 @@ type globalArgs struct {
 
 type run struct {
 	globalArgs
+	numWorkers int
 }
 
 type take struct {
@@ -93,21 +95,61 @@ func (r run) Run() error {
 	}
 	defer db.Close()
 
-	num := 0
+	jobs := make(chan *Job)
+	var numJobs int
+
+	// Channel to collect errors from async tasks;
+	// 1 per consumer plus one for producer.
+	errs := make(chan error, r.numWorkers+1)
+
+	// Start a worker to pull jobs from DB and push into queue.
+	go func() {
+		var err error
+		numJobs, err = runProducerWorker(db, jobs)
+		errs <- err
+	}()
+
+	for i := 0; i < r.numWorkers; i++ {
+		go func() {
+			errs <- runConsumerWorker(i, db, jobs)
+		}()
+	}
+
+	numErrs := 0
+	for i := 0; i < r.numWorkers+1; i++ {
+		if err := <-errs; err != nil {
+			numErrs++
+			log.Printf("Error: %v", err)
+		}
+	}
+
+	log.Printf("finished after processing %d jobs (%d errors)", numJobs, numErrs)
+	return nil
+}
+
+func runProducerWorker(db *DB, jobs chan<- *Job) (int, error) {
+	defer close(jobs)
+	numJobs := 0
 	for {
 		nextJob, err := db.TakeNextJob()
 		if err != nil {
-			return err
+			return numJobs, fmt.Errorf("failed to read next job from DB: %w", err)
 		}
 		if nextJob == nil {
-			break
+			return numJobs, nil
 		}
-		if err := execJob(db, nextJob); err != nil {
+		numJobs++
+		jobs <- nextJob
+	}
+	return numJobs, nil
+}
+
+func runConsumerWorker(workerId int, db *DB, jobs <-chan *Job) error {
+	for job := range jobs {
+		if err := execJob(db, job); err != nil {
 			return err
 		}
-		num++
 	}
-	log.Printf("finished after processing %d jobs", num)
 	return nil
 }
 
@@ -130,7 +172,7 @@ func (t take) Run() error {
 }
 
 func (cmd list) Run() error {
-	fmt.Println("opening", cmd.globalArgs.dbPath)
+	log.Printf("opening db at path: %s", cmd.globalArgs.dbPath)
 	db, err := Open(cmd.globalArgs.dbPath)
 	if err != nil {
 		return fmt.Errorf("failed to open db: %w", err)
@@ -199,7 +241,7 @@ func (cmd list) Run() error {
 		t.Row(JobToRow(job)...)
 	}
 
-	fmt.Println(t)
+	fmt.Print(t)
 
 	return err
 }
@@ -270,7 +312,21 @@ func parseSubcommand(globals globalArgs, args []string) (subcommand, error) {
 
 	switch cmd {
 	case runCommandName:
-		return run{globalArgs: globals}, nil
+		numWorkers := 1
+		var err error
+		if len(args) > 0 {
+			if numWorkers, err = strconv.Atoi(args[0]); err != nil {
+				return nil, fmt.Errorf("invalid value for number of workers")
+			}
+		}
+		if numWorkers < 1 {
+			numWorkers = 1
+		}
+
+		return run{
+			globalArgs: globals,
+			numWorkers: numWorkers,
+		}, nil
 	case takeCommandName:
 		var jobID int
 		var err error
