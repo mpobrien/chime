@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
+	"golang.org/x/term"
 )
 
 const chimeDBPathEnvKey = "CHIME_DB_PATH"
@@ -203,11 +204,40 @@ func (cmd list) Run() error {
 		PaddingLeft(2).
 		PaddingRight(2).Foreground(lipgloss.Color("196"))
 
+	termWidth, _, _ := term.GetSize(int(os.Stdout.Fd()))
+
+	// Pre-compute natural column widths so we can decide whether to cap.
+	idW := lipgloss.Width(headerStyle.Render("ID"))
+	statusW := lipgloss.Width(headerStyle.Render("STATUS"))
+	cmdW := lipgloss.Width(headerStyle.Render("COMMAND"))
+
+	rows := make([][]string, len(jobs))
+	for i, job := range jobs {
+		row := JobToRow(job)
+		rows[i] = row
+		idW = max(idW, lipgloss.Width(cellStyle.Render(row[0])))
+		var s lipgloss.Style
+		switch job.Status {
+		case statusPending:
+			s = pendingStyle
+		case statusInProgress:
+			s = progressStyle
+		case statusDoneSuccess:
+			s = successStyle
+		case statusDoneFailed:
+			s = failedStyle
+		default:
+			s = cellStyle
+		}
+		statusW = max(statusW, lipgloss.Width(s.Render(row[1])))
+		cmdW = max(cmdW, lipgloss.Width(cellStyle.Render(row[2])))
+	}
+
 	t := table.New().
 		Border(lipgloss.NormalBorder()).
 		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("99"))).
 		StyleFunc(func(row, col int) lipgloss.Style {
-			if row < 0 {
+			if row < 0 || row >= len(jobs) {
 				return headerStyle
 			}
 			if col != 1 {
@@ -225,20 +255,18 @@ func (cmd list) Run() error {
 			}
 			return cellStyle
 		}).
-		// StyleFunc(func(row, col int) lipgloss.Style {
-		// 	switch {
-		// 	case row == 0:
-		// 		return lipgloss.NewStyle()
-		// 	case row%2 == 0:
-		// 		return lipgloss.NewStyle()
-		// 	default:
-		// 		return OddRowStyle
-		// 	}
-		// }).
 		Headers("ID", "STATUS", "COMMAND")
 
-	for _, job := range jobs {
-		t.Row(JobToRow(job)...)
+	for _, row := range rows {
+		t.Row(row...)
+	}
+
+	// Only constrain to terminal width when the natural table would overflow.
+	// This prevents ID/STATUS from being expanded when the table is narrow.
+	// When overflowing, lipgloss shrinks the widest column (COMMAND) first.
+	const borderOverhead = 4 // left + right borders + 2 column separators
+	if termWidth > 0 && idW+statusW+cmdW+borderOverhead > termWidth {
+		t = t.Width(termWidth)
 	}
 
 	fmt.Print(t)
