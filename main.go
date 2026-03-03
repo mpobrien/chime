@@ -233,6 +233,22 @@ func (cmd list) Run() error {
 		cmdW = max(cmdW, lipgloss.Width(cellStyle.Render(row[2])))
 	}
 
+	// If the table would overflow the terminal, pre-truncate command strings
+	// with an ellipsis rather than letting lipgloss word-wrap or shrink.
+	const borderOverhead = 4 // left + right borders + 2 column separators
+	const cellPadding = 4    // PaddingLeft(2) + PaddingRight(2)
+	if termWidth > 0 && idW+statusW+cmdW+borderOverhead > termWidth {
+		maxCmdContent := termWidth - idW - statusW - borderOverhead - cellPadding
+		if maxCmdContent > 1 {
+			for i, row := range rows {
+				runes := []rune(row[2])
+				if len(runes) > maxCmdContent {
+					rows[i][2] = string(runes[:maxCmdContent-1]) + "…"
+				}
+			}
+		}
+	}
+
 	t := table.New().
 		Border(lipgloss.NormalBorder()).
 		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("99"))).
@@ -259,14 +275,6 @@ func (cmd list) Run() error {
 
 	for _, row := range rows {
 		t.Row(row...)
-	}
-
-	// Only constrain to terminal width when the natural table would overflow.
-	// This prevents ID/STATUS from being expanded when the table is narrow.
-	// When overflowing, lipgloss shrinks the widest column (COMMAND) first.
-	const borderOverhead = 4 // left + right borders + 2 column separators
-	if termWidth > 0 && idW+statusW+cmdW+borderOverhead > termWidth {
-		t = t.Width(termWidth)
 	}
 
 	fmt.Print(t)
